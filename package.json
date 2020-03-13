@@ -1,0 +1,60 @@
+{
+  "name": "moodules",
+  "version": "0.1.0",
+  "description": "Starter Reason Esy Pesy Project",
+  "esy": {
+    "build": "dune build -p #{self.name}",
+    "buildDev": "refmterr dune build -p #{self.name}",
+    "NOTE": "Optional release Section. Customizes result of `esy release`",
+    "release": {
+      "releasedBinaries": [
+        "Moodules.exe"
+      ]
+    },
+    "buildEnv": {
+      "ODOC_SYNTAX": "re"
+    }
+  },
+  "buildDirs": {
+    "bin": {
+      "flags": [
+        "-linkall",
+        "-short-paths",
+        "-g",
+        "-w",
+        "-9"
+      ],
+      "imports": [
+        "Fp = require('fp')",
+        "Fs = require('fs.lib')",
+        "Str = require('str')"
+      ],
+      "bin": {
+        "Moodules.exe": "Moodules.re"
+      }
+    }
+  },
+  "scripts": {
+    "start": "esy x Moodules.exe",
+    "doc": "esy dune build @doc",
+    "doc-path": "esy echo #{self.target_dir}/default/_doc/_html/index.html"
+  },
+  "dependencies": {
+    "@opam/dune": "*",
+    "@reason-native/fp": "*",
+    "@reason-native/fs": "*",
+    "@esy-ocaml/reason": "< 4.0.0",
+    "ocaml": ">= 4.6.0"
+  },
+  "devDependencies": {
+    "refmterr": "*",
+    "@opam/merlin": "*",
+    "ocaml": "~4.7.0",
+    "@opam/odoc": "*",
+    "@pesy/esy-pesy": "0.1.0-alpha.2"
+  },
+  "resolutions": {
+    "@reason-native/fp": "facebookexperimental/reason-native:fp.json#a7bb6356437bf2f7e1ded36a2db77ec7d659a67f",
+    "@reason-native/fs": "facebookexperimental/reason-native:fs.json#a7bb6356437bf2f7e1ded36a2db77ec7d659a67f"
+  }
+}

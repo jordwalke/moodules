@@ -1,0 +1,11 @@
+(executable (name Moodules) (modules (:standard \ MoodulesBinPesyModules))
+    (public_name Moodules.exe) (libraries moodules.bin.pesy-modules)
+    (flags -linkall -short-paths -g -w -9 -open MoodulesBinPesyModules))
+(library (public_name moodules.bin.pesy-modules)
+    (name MoodulesBinPesyModules) (modules MoodulesBinPesyModules)
+    (libraries fp fs.lib str))
+(rule
+    (with-stdout-to MoodulesBinPesyModules.re
+        (run echo  "module Fp = Fp;\
+                  \nmodule Fs = Fs;\
+                  \nmodule Str = Str;")))
