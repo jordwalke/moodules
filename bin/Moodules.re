@@ -4,10 +4,10 @@ let pwd =
   Str.global_replace(Str.regexp("\\\\\\([^\\\\]\\|$\\)?"), "/\\1", pwd);
 let commentRe = Str.regexp("[ \t];.*$");
 let publicNameRe = Str.regexp("([ \t]*public_name[ \t]*\\([^)]*\\)");
-let implementsRe = Str.regexp("([ \t]*extends_moodule[ \t]*\\([^)]*\\)");
-let mooduleAbstractRe = Str.regexp("([ \t]*abstract_moodule[ \t]*)");
-let includeUnqualified =
+let extendsRe = Str.regexp("([ \t]*extends_moodule[ \t]*\\([^)]*\\))");
+let includeUnqualifiedRe =
   Str.regexp("([ \t]*include_subdirs[ \t]*\\unqualified[ \t]*)");
+let dirsRe = Str.regexp("([ \t]*dirs[ \t]*\\([^)]*\\)");
 let dotRe = Str.regexp("\\.");
 
 let duneDir = Fp.absoluteExn(pwd);
@@ -29,6 +29,15 @@ let range =
     }
   };
 
+let stripComments = s => Str.global_replace(commentRe, "", s);
+
+let stripExtends = (s, extends) =>
+  Str.replace_first(
+    extendsRe,
+    "\n ; extends " ++ extends ++ " handled by moodule",
+    s,
+  );
+
 /* switch (baseName) { */
 /* | Some("virtual") => () */
 /* | Some(_) */
@@ -39,14 +48,14 @@ let range =
 /*   } */
 /* }; */
 
-let origDuneConfig =
+let duneConfig =
   switch (range) {
   | None =>
     [
-      "(library",
-      "  (public_name \"virtualish.llfoobar\")",
-      "  (name foo)",
-      ")",
+      "(error \"The dune file in "
+      ++ Fp.toDebugString(duneDir)
+      ++ " uses the Moodules plugin but doesn't include any manual dune config. "
+      ++ "Include a {|..|} string with your actual dune config somewhere in the file. Doesn't matter where\")",
     ]
     |> String.concat("\n")
   | Some((start, end_)) => String.sub(fileContents, start, end_ - start + 1)
@@ -57,19 +66,15 @@ let origDuneConfig =
  * copy all deeper files into the root directory in order to join files from
  * multiple locations.
  */
-let origDuneConfigNoComments =
-  Str.global_replace(commentRe, "", origDuneConfig);
+let duneConfig = stripComments(duneConfig);
 
 let hasUnqualified = s =>
-  switch (Str.search_forward(includeUnqualified, s, 0)) {
+  switch (Str.search_forward(includeUnqualifiedRe, s, 0)) {
   | exception Not_found => false
   | i => true
   };
 
-let origDuneHasUnqualified = hasUnqualified(origDuneConfigNoComments);
-
-let origDuneMinusUnqualified =
-  Str.global_replace(includeUnqualified, "", origDuneConfigNoComments);
+let origDuneHasUnqualified = hasUnqualified(duneConfig);
 
 /* let parsedConfig = */
 /*   Sexpression.s_expression_of_token_list( */
@@ -84,127 +89,102 @@ let extractPublicName = s =>
     Some(Str.matched_group(1, s));
   };
 
-let extractUnqualified = s =>
-  switch (Str.search_forward(includeUnqualified, s, 0)) {
-  | exception Not_found => false
-  | i => true
-  };
-
-let extractImplements = s =>
-  switch (Str.search_forward(implementsRe, s, 0)) {
+let extractExtends = s =>
+  switch (Str.search_forward(extendsRe, s, 0)) {
   | exception Not_found => None
   | i =>
-    let _matched = Str.string_match(implementsRe, s, i);
+    let _matched = Str.string_match(extendsRe, s, i);
     Some(Str.matched_group(1, s));
   };
 
-/**
- * Abstract moodule libraries are not and cannot be used - except in order
- * to extend them. This means they can have `.rei` files without corresponding
- * `.re` files, or other incomplete features that are completed in extensions.
- */
-let extractIsAbstractMoodule = s =>
-  switch (Str.search_forward(mooduleAbstractRe, s, 0)) {
-  | exception Not_found => false
-  | i => true
+let extractDirsDirective = s =>
+  switch (Str.search_forward(dirsRe, s, 0)) {
+  | exception Not_found => None
+  | i =>
+    let _matched = Str.string_match(dirsRe, s, i);
+    Some(Str.matched_group(1, s));
   };
 
 let publicName =
-  switch (extractPublicName(origDuneMinusUnqualified)) {
+  switch (extractPublicName(duneConfig)) {
   | None => "nopublicname"
   | Some(pn) => pn
   };
 
-let implementsString =
-  switch (extractImplements(origDuneMinusUnqualified)) {
+let extendsString =
+  switch (extractExtends(duneConfig)) {
   | None => "nopublicname"
   | Some(pn) => pn
   };
 
-let origDuneMinusImplements =
-  Str.replace_first(
-    implementsRe,
-    "\n ; implements " ++ implementsString ++ " handled by moodule",
-    origDuneMinusUnqualified,
-  );
-let (implements, isAbstract) = (
-  extractImplements(origDuneMinusUnqualified),
-  extractIsAbstractMoodule(origDuneMinusUnqualified),
-);
+let extends = extractExtends(duneConfig);
 
-if (isAbstract) {
-  print_endline("; Abstract moodule");
-  exit(0);
-};
-
-let alreadyInTarget = Hashtbl.create(7);
-
-let allRelSourcesAlreadyInTarget = {
-  let onNode = (queryResult: Fs.queryResult, cont) => {
-    switch (queryResult) {
-    | File(path, stats) =>
-      Hashtbl.add(
-        alreadyInTarget,
-        Fp.relativizeExn(~source=duneDir, ~dest=path),
-        true,
-      )
-    | Dir(path, _) =>
-      if (Fp.eq(path, duneDir) || origDuneHasUnqualified) {
-        cont();
-      }
-    | Other(_) => ()
-    | Link(path, toPath, stats) => ()
-    };
-  };
-  Fs.traverseFileSystemFromPath(~onNode, duneDir);
-};
-
-let pathsToCopyFromInside =
-  Hashtbl.fold(
-    (key, _, cur) => {
-      !Fp.eq(Fp.dirName(Fp.join(duneDir, key)), duneDir)
-        ? [(duneDir, Fp.join(duneDir, key)), ...cur] : cur
-    },
-    alreadyInTarget,
-    [],
-  );
-
-let pathsToCopyFromOutsideDir = (unqualified, fromDir) => {
-  let toCopySet = Hashtbl.create(7);
-  let onNode = (queryResult: Fs.queryResult, cont) => {
-    switch (queryResult) {
-    | File(path, stats) =>
-      let rel = Fp.relativizeExn(~source=fromDir, ~dest=path);
-      if (Hashtbl.find_opt(alreadyInTarget, rel) === None) {
-        // Fp.baseName(rel) != Some("VirtualInterfaceInSubdir.rei") &&
+let doExtends = extends => {
+  let alreadyInTarget = {
+    let alreadyInTarget_ = Hashtbl.create(7);
+    let onNode = (queryResult: Fs.queryResult, cont) => {
+      switch (queryResult) {
+      | File(path, stats) =>
         Hashtbl.add(
-          toCopySet,
-          (fromDir, path),
+          alreadyInTarget_,
+          Fp.relativizeExn(~source=duneDir, ~dest=path),
           true,
-        );
+        )
+      | Dir(path, _) =>
+        if (Fp.eq(path, duneDir) || origDuneHasUnqualified) {
+          cont();
+        }
+      | Other(_) => ()
+      | Link(path, toPath, stats) => ()
       };
-    | Dir(path, _) =>
-      if (Fp.eq(path, fromDir) || unqualified) {
-        cont();
-      }
-    | Other(_) => ()
-    | Link(path, toPath, stats) => ()
     };
+    Fs.traverseFileSystemFromPath(~onNode, duneDir);
+    alreadyInTarget_;
   };
-  Fs.traverseFileSystemFromPath(~onNode, fromDir);
-  toCopySet;
-};
 
-let siblingDirs = Fs.readDirExn(parentDir);
-let absolutePathsToCopy =
-  List.fold_left(
-    (absolutePathsToCopy, sibling) =>
-      if (Fp.eq(sibling, duneDir)) {
-        absolutePathsToCopy;
-      } else {
-        switch (implements) {
-        | None => absolutePathsToCopy
-        | Some(im) =>
+  let pathsToCopyFromInside =
+    Hashtbl.fold(
+      (key, _, cur) => {
+        !Fp.eq(Fp.dirName(Fp.join(duneDir, key)), duneDir)
+          ? [(duneDir, Fp.join(duneDir, key)), ...cur] : cur
+      },
+      alreadyInTarget,
+      [],
+    );
+
+  let pathsToCopyFromOutsideDir = (unqualified, fromDir) => {
+    let toCopySet = Hashtbl.create(7);
+    let onNode = (queryResult: Fs.queryResult, cont) => {
+      switch (queryResult) {
+      | File(path, stats) =>
+        let rel = Fp.relativizeExn(~source=fromDir, ~dest=path);
+        if (Hashtbl.find_opt(alreadyInTarget, rel) === None) {
+          // Fp.baseName(rel) != Some("VirtualInterfaceInSubdir.rei") &&
+          Hashtbl.add(
+            toCopySet,
+            (fromDir, path),
+            true,
+          );
+        };
+      | Dir(path, _) =>
+        if (Fp.eq(path, fromDir) || unqualified) {
+          cont();
+        }
+      | Other(_) => ()
+      | Link(path, toPath, stats) => ()
+      };
+    };
+    Fs.traverseFileSystemFromPath(~onNode, fromDir);
+    toCopySet;
+  };
+
+  let siblingDirs = Fs.readDirExn(parentDir);
+  let absolutePathsToCopy =
+    List.fold_left(
+      (absolutePathsToCopy, sibling) =>
+        if (Fp.eq(sibling, duneDir)) {
+          absolutePathsToCopy;
+        } else {
           switch (Fs.readText(Fp.append(sibling, "dune"))) {
           | Error(_) => absolutePathsToCopy
           | Ok(lines) =>
@@ -212,7 +192,7 @@ let absolutePathsToCopy =
             switch (extractPublicName(txt)) {
             | None => absolutePathsToCopy
             | Some(pn) =>
-              if (String.equal(pn, im)) {
+              if (String.equal(pn, extends)) {
                 let otherLibIsUnqualified = hasUnqualified(txt);
                 let allAbsSourcesToCopyFromSibling =
                   pathsToCopyFromOutsideDir(otherLibIsUnqualified, sibling);
@@ -227,78 +207,85 @@ let absolutePathsToCopy =
                 absolutePathsToCopy;
               }
             };
-          }
-        };
-      },
-    [],
-    siblingDirs,
-  );
+          };
+        },
+      [],
+      siblingDirs,
+    );
 
-let publicNameDebug = Str.global_replace(dotRe, "--", publicName);
-
-let copyFileToTopLevelOfLibraryRule = ((otherLibRoot, absSource)) => {
-  let relFromLib = Fp.relativizeExn(~source=duneDir, ~dest=absSource);
-  let baseName =
-    switch (Fp.baseName(absSource)) {
-    | None => "CannotDetermineBaseNameOfFile_ReportThisError.txt"
-    | Some(bn) => bn
-    };
-  "(rule "
-  ++ "(target "
-  ++ baseName
-  ++ ")"
-  ++ "(action (copy# "
-  ++ Fp.toDebugString(relFromLib)
-  ++ " "
-  ++ baseName
-  ++ ")))";
-};
-let copyLines =
-  List.map(copyFileToTopLevelOfLibraryRule, absolutePathsToCopy);
-let copyLinesInternal =
-  List.map(copyFileToTopLevelOfLibraryRule, pathsToCopyFromInside);
-let copyString =
-  switch (implements, copyLines) {
-  | (Some(im), []) =>
-    if (String.equal(im, publicName)) {
-      "\n(library-named---"
-      ++ publicName
-      ++ "---claims-to-implement-itself--That-does-not-make-sense)";
-    } else {
-      "\n(i-cannot-find-the-virtual-library---"
-      ++ im
-      ++ "---supposedly-implemented-by---"
-      ++ publicName
-      ++ "---make-sure-it-is-a-sibling)";
-    }
-  | (Some(_), [_, ..._])
-  | (None, []) =>
-    String.concat("\n", ["", ...copyLines @ copyLinesInternal])
-  | (None, [_, ..._]) =>
-    "\n(internal-error-library---"
-    ++ publicName
-    ++ "---should-not-be-copying-over-files-it-doesnt-implement-a-virtual-library)"
+  let copyFileToTopLevelOfLibraryRule = ((otherLibRoot, absSource)) => {
+    let relFromLib = Fp.relativizeExn(~source=duneDir, ~dest=absSource);
+    "(copy_files# " ++ Fp.toDebugString(relFromLib) ++ ")";
   };
+  let copyLines =
+    List.map(copyFileToTopLevelOfLibraryRule, absolutePathsToCopy);
+  let copyLinesInternal =
+    List.map(copyFileToTopLevelOfLibraryRule, pathsToCopyFromInside);
+  let copyString =
+    switch (copyLines) {
+    | [] =>
+      if (String.equal(extends, publicName)) {
+        "\n(library-named---"
+        ++ publicName
+        ++ "---claims-to-implement-itself--That-does-not-make-sense)";
+      } else {
+        "\n(i-cannot-find-the-virtual-library---"
+        ++ extends
+        ++ "---supposedly-implemented-by---"
+        ++ publicName
+        ++ "---make-sure-it-is-a-sibling)";
+      }
+    | [_, ..._] =>
+      String.concat("\n", ["", ...copyLines @ copyLinesInternal])
+    };
 
-let everythingButDebug = origDuneMinusImplements ++ copyString;
-let debugLines = [
-  "",
-  "; DEBUG COMMAND",
-  "(alias (name debug-"
-  ++ publicNameDebug
-  ++ ") (action (echo \""
-  ++ everythingButDebug
-  ++ "\")",
-  "))",
-];
-let debugLines =
-  String.split_on_char('\n', String.concat("\n", debugLines))
-  |> List.map(s => "        " ++ s);
+  let duneConfig = stripExtends(duneConfig, extendsString);
 
-let debugString = String.concat("\n", debugLines);
-/* This was changed in dune 2.0 */
-let debugString = "";
+  let duneConfig = Str.global_replace(includeUnqualifiedRe, "", duneConfig);
 
-print_endline(everythingButDebug);
-print_endline(debugString ++ "\n");
-exit(0);
+  let everythingButDebug = duneConfig ++ copyString;
+  /* let publicNameDebug = Str.global_replace(dotRe, "--", publicName); */
+  /* let debugLines = [ */
+  /*   "", */
+  /*   "; DEBUG COMMAND", */
+  /*   "(alias (name debug-" */
+  /*   ++ publicNameDebug */
+  /*   ++ ") (action (echo \"" */
+  /*   ++ everythingButDebug */
+  /*   ++ "\")", */
+  /*   "))", */
+  /* ]; */
+  /* let debugLines = */
+  /*   String.split_on_char('\n', String.concat("\n", debugLines)) */
+  /*   |> List.map(s => "        " ++ s); */
+
+  /* let debugString = String.concat("\n", debugLines); */
+  /* This was changed in dune 2.0 */
+  let debugString = "";
+
+  print_endline(everythingButDebug);
+  print_endline(debugString ++ "\n");
+  exit(0);
+};
+
+let doBase = () => {
+  print_endline(
+    "; Abstract moodule - can't be instantiated but can be extended",
+  );
+  switch (extractDirsDirective(duneConfig)) {
+  | Some(dirs) => print_endline("(dirs " ++ dirs ++ ")")
+  | None => ()
+  };
+  if (origDuneHasUnqualified) {
+    print_endline("(include_subdirs unqualified)");
+  };
+  exit(0);
+};
+
+switch (extends) {
+/* Then duneConfig *is* the "base class". Only questions are what directories
+ * should be considered. We'll say all base classes are abstract and not
+ * instantiable for now.  */
+| None => doBase()
+| Some(extends) => doExtends(extends)
+};

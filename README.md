@@ -7,8 +7,6 @@ Prototype of OO style Libraries for Dune. This is mostly just a much more limite
 
 This works by simply copying modules around, which simplifies the implementation.
 
-- It also allows you to depend on a "virtual library" directly, not requiring
-  the executable to specify a concrete implementation.
 - Allows depending on a concrete library that "extends" a virtual library, and
   then rely on additional modules inside of that concrete library that were not
   part of the virtual library.
@@ -66,8 +64,8 @@ send (String.concat "\n" (run_and_read_lines "Moodules"));;
 The contents of the subclass "inherit" the base class.
 
 If you want the base library to never be instantiable, or perhaps even be
-misformed until extended, you can mark it as abstract with:
-`(abstract_moodule)`.
+misformed until extended, it is by default considered abstract just by nature
+of using the Moodules plugin, and not specifying an `(extends )` directive.
 
 
 ```
@@ -76,7 +74,6 @@ open Jbuild_plugin.V1;;
 send (String.concat "\n" (run_and_read_lines "Moodules"));;
 {|
   (library
-    (abstract_moodule)
     (public_name virtualish.baseclass)
     (name VirtualishBaseclass)
   )
