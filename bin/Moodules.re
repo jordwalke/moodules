@@ -124,7 +124,8 @@ let doExtends = extends => {
     let alreadyInTarget_ = Hashtbl.create(7);
     let onNode = (queryResult: Fs.queryResult, cont) => {
       switch (queryResult) {
-      | File(path, stats) =>
+      | File(path, _)
+      | Link(path, _, _) =>
         Hashtbl.add(
           alreadyInTarget_,
           Fp.relativizeExn(~source=duneDir, ~dest=path),
@@ -135,7 +136,6 @@ let doExtends = extends => {
           cont();
         }
       | Other(_) => ()
-      | Link(path, toPath, stats) => ()
       };
     };
     Fs.traverseFileSystemFromPath(~onNode, duneDir);
